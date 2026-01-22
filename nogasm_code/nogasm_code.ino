@@ -45,6 +45,8 @@
 #include <EEPROM.h>
 #include "FastLED.h"
 #include "RunningAverage.h"
+#include <SerialCommands.h>
+#include "comm.h"
 
 //=======Hardware Setup===============================
 //LEDs
@@ -106,6 +108,14 @@ int sensitivity = 0; //orgasm detection sensitivity, persists through different 
 
 
 uint8_t state = MANUAL;
+//=======SlvCtrl+====================================
+const char* DEVICE_TYPE = "nogasm";
+const int FW_VERSION = 10000; // 1.00.00
+const int PROTOCOL_VERSION = 10000; // 1.00.00
+
+char serial_command_buffer[32];
+SerialCommands serialCommands(&Serial, serial_command_buffer, sizeof(serial_command_buffer), "\n", " ");
+
 //=======Global Settings=============================
 //DIP switch options:
 uint8_t MOT_MAX =   179; //By default, motor speed only ever reaches 179. Alternative is 255
@@ -187,7 +197,19 @@ void setup() {
   SW3 = (digitalRead(SW3PIN) == LOW);
   SW4 = (digitalRead(SW4PIN) == LOW);
 
-  Serial.begin(115200);
+  Serial.begin(9600);
+
+  // Add commands
+  serialCommands.SetDefaultHandler(commandUnrecognized);
+  serialCommands.AddCommand(new SerialCommand("introduce", commandIntroduce));
+  serialCommands.AddCommand(new SerialCommand("attributes", commandAttributes));
+  serialCommands.AddCommand(new SerialCommand("status", commandStatus));
+  serialCommands.AddCommand(new SerialCommand("set-mode", commandSetMode));
+  serialCommands.AddCommand(new SerialCommand("set-maxSpeed", commandSetMaxSpeed));
+  serialCommands.AddCommand(new SerialCommand("set-sensitivity", commandSetSensitivity));
+  serialCommands.AddCommand(new SerialCommand("set-rampUpTime", commandSetRampUpTime));
+
+  serialCommands.GetSerial()->write(0x07);
 
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
   // limit power draw to .6A at 5v... Didn't seem to work in my FastLED version though
@@ -270,9 +292,9 @@ void run_manual() {
   motSpeed = map(knob, 0, 12, 0., (float)MOT_MAX);
   analogWrite(MOTPIN, motSpeed);
 
-  //gyrGraphDraw(avgPressure, 0, 4 * 3 * NUM_LEDS);
-  int presDraw = map(constrain(pressure - avgPressure, 0, pLimit),0,pLimit,0,NUM_LEDS*3);
-  draw_bars_3(presDraw, CRGB::Green,CRGB::Yellow,CRGB::Red);
+  // @todo, needs to be fixed that already on boot up the sensitivity from EEPROM is used, if available
+  /*int presDraw = map(constrain(pressure - avgPressure, 0, pLimit),0,pLimit,0,NUM_LEDS*3);
+  draw_bars_3(presDraw, CRGB::Green,CRGB::Yellow,CRGB::Red);*/
   draw_cursor(knob, CRGB::Red);
 }
 
@@ -306,7 +328,7 @@ void run_auto() {
 
 //Setting menu for adjusting the maximum vibrator speed automatic mode will ramp up to
 void run_opt_speed() {
-  Serial.println("speed settings");
+  //Serial.println("speed settings");
   int knob = encLimitRead(0,12);
   motSpeed = map(knob, 0, 12, 0., (float)MOT_MAX);
   analogWrite(MOTPIN, motSpeed);
@@ -320,12 +342,12 @@ void run_opt_speed() {
 
 //Not yet added, but adjusts how quickly the vibrator turns back on after being triggered off
 void run_opt_rampspd() {
-  Serial.println("rampSpeed");
+  //Serial.println("rampSpeed");
 }
 
 //Also not completed, option for enabling/disabling beeps
 void run_opt_beep() {
-  Serial.println("Brightness Settings");
+  //Serial.println("Brightness Settings");
 }
 
 //Simply display the pressure analog voltage. Useful for debugging sensitivity issues.
@@ -397,109 +419,223 @@ void run_state_machine(uint8_t state){
 
 //Switch between state machine states, and reset the encoder position as necessary
 //Returns the next state to run. Very long presses will turn the system off (sort of)
-uint8_t set_state(uint8_t btnState, uint8_t state){
-  if(btnState == BTN_NONE){
-    return state;
+uint8_t next_state_from_button(uint8_t btnState, uint8_t currentState) {
+  if (btnState == BTN_NONE) return currentState;
+
+  if (btnState == BTN_V_LONG) {
+    return MANUAL; // “power off” is a separate behavior; keep as-is or handle elsewhere
   }
-  if(btnState == BTN_V_LONG){
-    //Turn the device off until woken up by the button
-    Serial.println("power off");
-    fill_gradient_RGB(leds,0,CRGB::Black,NUM_LEDS-1,CRGB::Black);//Turn off LEDS
-    FastLED.show();
-    showKnobRGB(CRGB::Black);
-    analogWrite(MOTPIN, 0);
-    beep_motor(2093,1396,1047);
-    analogWrite(MOTPIN, 0); //Turn Motor off
-    while(!digitalRead(ENC_SW))delay(1);
-    beep_motor(1047,1396,2093);
-    return MANUAL ;
-  }
-  else if(btnState == BTN_SHORT){
-    switch(state){
-      case MANUAL:
-        myEnc.write(sensitivity);//Whenever going into auto mode, keep the last sensitivity
-        motSpeed = 0; //Also reset the motor speed to 0
-        return AUTO;
-      case AUTO:
-        myEnc.write(0);//Whenever going into manual mode, set the speed to 0.
-        motSpeed = 0;
-        EEPROM.update(SENSITIVITY_ADDR, sensitivity);
-        return MANUAL;
-      case OPT_SPEED:
-        myEnc.write(0);
-        EEPROM.update(MAX_SPEED_ADDR, maxSpeed);
-        //return OPT_RAMPSPD;
-        //return OPT_BEEP;
-        motSpeed = 0;
-        analogWrite(MOTPIN, motSpeed); //Turn the motor off for the white pressure monitoring mode
-        return OPT_PRES; //Skip beep and rampspeed settings for now
-      case OPT_RAMPSPD: //Not yet implimented
-        //motSpeed = 0;
-        //myEnc.write(0);
-        return OPT_BEEP;
-      case OPT_BEEP:
-        myEnc.write(0);
-        return OPT_PRES;
-      case OPT_PRES:
-        myEnc.write(map(maxSpeed,0,255,0,4*(NUM_LEDS)));//start at saved value
-        return OPT_SPEED;
+
+  if (btnState == BTN_SHORT) {
+    switch (currentState) {
+      case MANUAL:      return AUTO;
+      case AUTO:        return MANUAL;
+      case OPT_SPEED:   return OPT_PRES;
+      case OPT_PRES:    return OPT_SPEED;
+      case OPT_RAMPSPD: return OPT_BEEP;
+      case OPT_BEEP:    return OPT_PRES;
+      default:          return MANUAL;
     }
   }
-  else if(btnState == BTN_LONG){
-    switch (state) {
-          case MANUAL:
-            myEnc.write(map(maxSpeed,0,255,0,4*(NUM_LEDS)));//start at saved value
-            return OPT_SPEED;
-          case AUTO:
-            myEnc.write(map(maxSpeed,0,255,0,4*(NUM_LEDS)));//start at saved value
-            return OPT_SPEED;
-          case OPT_SPEED:
-            myEnc.write(0);
-            return MANUAL;
-          case OPT_RAMPSPD:
-            return MANUAL;
-          case OPT_BEEP:
-            return MANUAL;
-          case OPT_PRES:
-            myEnc.write(0);
-            return MANUAL;
-        }
+
+  if (btnState == BTN_LONG) {
+    switch (currentState) {
+      case MANUAL: return OPT_SPEED;
+      case AUTO:   return OPT_SPEED;
+      default:     return MANUAL;
+    }
   }
-  else return MANUAL;
+
+  return currentState;
+}
+
+void transition_to(uint8_t newState)
+{
+  if (newState == state) return;
+
+  // --- exit actions (based on OLD state) ---
+  switch (state) {
+    case AUTO:
+      EEPROM.update(SENSITIVITY_ADDR, sensitivity);
+      break;
+    case OPT_SPEED:
+      EEPROM.update(MAX_SPEED_ADDR, maxSpeed);
+      break;
+  }
+
+  // --- entry actions (based on NEW state) ---
+  switch (newState) {
+    case MANUAL:
+      myEnc.write(0);
+      motSpeed = 0;
+      analogWrite(MOTPIN, 0);
+      break;
+
+    case AUTO:
+      myEnc.write(sensitivity);   // sensitivity is encoder counts (0..144)
+      motSpeed = 0;
+      analogWrite(MOTPIN, 0);
+      break;
+
+    case OPT_SPEED:
+      myEnc.write(map(maxSpeed, 0, 255, 0, 4 * (NUM_LEDS)));
+      motSpeed = 0;
+      analogWrite(MOTPIN, 0);
+      break;
+
+    case OPT_PRES:
+      myEnc.write(0);
+      motSpeed = 0;
+      analogWrite(MOTPIN, 0);
+      break;
+  }
+
+  state = newState;
+}
+
+void power_off_sequence() {
+  //Turn the device off until woken up by the button
+  Serial.println("power off");
+  fill_gradient_RGB(leds,0,CRGB::Black,NUM_LEDS-1,CRGB::Black);//Turn off LEDS
+  FastLED.show();
+  showKnobRGB(CRGB::Black);
+  analogWrite(MOTPIN, 0);
+  beep_motor(2093,1396,1047);
+  analogWrite(MOTPIN, 0); //Turn Motor off
+  while(!digitalRead(ENC_SW))delay(1);
+  beep_motor(1047,1396,2093);
 }
 
 //=======Main Loop=============================
 void loop() {
-  static uint8_t state = MANUAL;
   static int sampleTick = 0;
-  //Run this section at the update frequency (default 60 Hz)
-  if (millis() % period == 0) {
-    delay(1);
-    
-    sampleTick++; //Add pressure samples to the running average slower than 60Hz
-    if (sampleTick % RA_TICK_PERIOD == 0) {
-      raPressure.addValue(pressure);
-      avgPressure = raPressure.getAverage();
-    }
-    
-    pressure = analogRead(BUTTPIN);
-    fadeToBlackBy(leds,NUM_LEDS,20); //Create a fading light effect. LED buffer is not otherwise cleared
-    uint8_t btnState = check_button();
-    state = set_state(btnState,state); //Set the next state based on this state and button presses
-    run_state_machine(state);
-    FastLED.show(); //Update the physical LEDs to match the buffer in software
+  static unsigned long lastTick = 0;
 
-    //Alert that the Pressure voltage amplifier is railing, and the trim pot needs to be adjusted
-    if(pressure > 4030)beep_motor(2093,2093,2093); //Three high beeps
+  serialCommands.ReadSerial();
 
-    //Report pressure and motor data over USB for analysis / other uses. timestamps disabled by default
-    //Serial.print(millis()); //Timestamp (ms)
-    //Serial.print(",");
-    Serial.print(motSpeed); //Motor speed (0-255)
-    Serial.print(",");
-    Serial.print(pressure); //(Original ADC value - 12 bits, 0-4095)
-    Serial.print(",");
-    Serial.println(avgPressure); //Running average of (default last 25 seconds) pressure
+  unsigned long now = millis();
+  if (now - lastTick < period) return;
+  lastTick = now;
 
+  pressure = analogRead(BUTTPIN);
+
+  sampleTick++;
+  if (sampleTick % RA_TICK_PERIOD == 0) {
+    raPressure.addValue(pressure);
+    avgPressure = raPressure.getAverage();
   }
+
+  fadeToBlackBy(leds, NUM_LEDS, 20);
+
+  uint8_t btnState = check_button();
+
+  if (btnState == BTN_V_LONG) {
+    power_off_sequence();
+    transition_to(MANUAL);
+    return;
+  }
+
+  uint8_t next = next_state_from_button(btnState, state);
+  transition_to(next);
+
+  run_state_machine(state);
+  FastLED.show(); // Update the physical LEDs to match the buffer in software
+
+  //Alert that the Pressure voltage amplifier is railing, and the trim pot needs to be adjusted
+  if (pressure > 4030) beep_motor(2093, 2093, 2093);
+}
+
+void commandIntroduce(SerialCommands* sender) {
+  serial_printf(sender->GetSerial(), "introduce;%s,%d,%d\n", DEVICE_TYPE, FW_VERSION, PROTOCOL_VERSION);
+}
+
+void commandAttributes(SerialCommands* sender)
+{
+  serial_printf(sender->GetSerial(), "attributes;timestampMs:ro[int],mode:rw[%d|%d],currentSpeed:ro[0-255],maxSpeed:rw[0-255],currentPressure:ro[0-4095],avgPressure:ro[0-4095],sensitivity:rw[1-37],maxPressureDelta:ro[1-600],rampUpTime:rw[10-60],remainingCoolDownTime:ro[0-15]\n", MANUAL, AUTO);
+}
+
+void commandStatus(SerialCommands* sender) {
+  int statusMotSpeed = motSpeed;
+  int remainingCooldown = 0;
+
+  if (motSpeed < 0) {
+    statusMotSpeed = 0; 
+    remainingCooldown = (-motSpeed * rampTimeS) / maxSpeed;
+  }
+
+  serial_printf(
+    sender->GetSerial(), 
+    "status;timestampMs:%d,mode:%d,currentSpeed:%d,maxSpeed:%d,currentPressure:%d,avgPressure:%d,maxPressureDelta:%d,sensitivity:%d,rampUpTime:%d,remainingCoolDownTime:%d\n", 
+    millis(), state, statusMotSpeed, maxSpeed, pressure, avgPressure, pLimit, map(pLimit, 600, 1, 1, 37), rampTimeS, remainingCooldown
+  );
+}
+
+void commandSetMode(SerialCommands* sender)
+{
+  long mode;
+  ParamError err = validateRangeParam(sender->Next(), MANUAL, AUTO, mode);
+
+  if (err != ParamError::Ok) {
+    serial_printf(sender->GetSerial(), "set-mode;;status:failed,reason:%s\n", paramErrorToString(err));
+    return;
+  }
+
+  transition_to((uint8_t)mode);
+
+  serial_printf(sender->GetSerial(), "set-mode;%d;status:successful\n", state);
+}
+
+void commandSetMaxSpeed(SerialCommands* sender)
+{
+  long inputMaxSpeed;
+  ParamError err = validateRangeParam(sender->Next(), 0, 255, inputMaxSpeed);
+
+  if (err != ParamError::Ok) {
+    serial_printf(sender->GetSerial(), "set-maxSpeed;;status:failed,reason:%s\n", paramErrorToString(err));
+    return;
+  }
+
+  // set the thing
+  maxSpeed = inputMaxSpeed;
+
+  serial_printf(sender->GetSerial(), "set-maxSpeed;%d;status:successful\n", maxSpeed);
+}
+
+void commandSetSensitivity(SerialCommands* sender)
+{
+  long inputSensitivity;
+  ParamError err = validateRangeParam(sender->Next(), 1, 37, inputSensitivity);
+
+  if (err != ParamError::Ok) {
+    serial_printf(sender->GetSerial(), "set-maxPressureDelta;;status:failed,reason:%s\n", paramErrorToString(err));
+    return;
+  }
+
+  // set the thing
+  if (state == AUTO) {
+    int steps = 3 * (NUM_LEDS - 1) + 1;   // 37
+
+    int step = constrain(inputSensitivity, 1, steps) - 1; // 0..36
+    myEnc.write(step * 4);
+  
+    serial_printf(sender->GetSerial(), "set-maxPressureDelta;%d;status:successful\n", inputSensitivity);
+  } else {
+    serial_printf(sender->GetSerial(), "set-maxPressureDelta;%d;status:failed,reason:not_in_auto_mode\n");
+  }
+}
+
+void commandSetRampUpTime(SerialCommands* sender)
+{
+  long inputSetRampUpTime;
+  ParamError err = validateRangeParam(sender->Next(), 10, 60, inputSetRampUpTime);
+
+  if (err != ParamError::Ok) {
+    serial_printf(sender->GetSerial(), "set-setRampUpTime;;status:failed,reason:%s\n", paramErrorToString(err));
+    return;
+  }
+
+  // set the thing
+  rampTimeS = inputSetRampUpTime;
+
+  serial_printf(sender->GetSerial(), "set-setRampUpTime;%d;status:successful\n", pLimit);
 }
