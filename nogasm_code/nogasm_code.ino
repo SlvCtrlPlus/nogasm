@@ -89,7 +89,6 @@ Encoder myEnc(8, 7); //Quadrature inputs on pins 7,8
 #define RA_FREQUENCY 6
 #define RA_TICK_PERIOD (FREQUENCY / RA_FREQUENCY)
 RunningAverage raPressure(RA_FREQUENCY*RA_HIST_SECONDS);
-int sensitivity = 0; //orgasm detection sensitivity, persists through different states
 
 //=======State Machine Modes=========================
 #define MANUAL      1
@@ -108,6 +107,7 @@ int sensitivity = 0; //orgasm detection sensitivity, persists through different 
 
 
 uint8_t state = MANUAL;
+
 //=======SlvCtrl+====================================
 const char* DEVICE_TYPE = "nogasm";
 const int FW_VERSION = 10000; // 1.00.00
@@ -117,12 +117,14 @@ char serial_command_buffer[32];
 SerialCommands serialCommands(&Serial, serial_command_buffer, sizeof(serial_command_buffer), "\n", " ");
 
 //=======Global Settings=============================
+const uint8_t SENSITIVITY_MAX = 3 * (NUM_LEDS - 1);
+const uint8_t MOT_MIN = 20; // Motor PWM minimum.  It needs a little more than this to start.
+
 //DIP switch options:
 uint8_t MOT_MAX =   179; //By default, motor speed only ever reaches 179. Alternative is 255
 bool SW2 =        false;
 bool SW3 =        false;
 bool SW4 =        false;
-#define MOT_MIN 20  // Motor PWM minimum.  It needs a little more than this to start.
 
 CRGB leds[NUM_LEDS];
 
@@ -131,8 +133,9 @@ int avgPressure = 0; //Running 25 second average pressure
 //int bri =100; //Brightness setting
 int rampTimeS = 30; //Ramp-up time, in seconds
 #define DEFAULT_PLIMIT 600
+int sensitivity = 0;
 int pLimit = DEFAULT_PLIMIT; //Limit in change of pressure before the vibrator turns off
-int maxSpeed = 255; //maximum speed the motor will ramp up to in automatic mode
+uint8_t maxSpeed = 255; //maximum speed the motor will ramp up to in automatic mode
 float motSpeed = 0; //Motor speed, 0-255 (float to maintain smooth ramping to low speeds)
 
 //=======EEPROM Addresses============================
@@ -189,8 +192,7 @@ void setup() {
   //Right now, only SW1 is used, for enabling higher maximum motor speed.
   if(digitalRead(SW1PIN)){
     MOT_MAX = 179; //At the default low position, limit the motor speed
-  }
-  else{
+  } else{
     MOT_MAX = 255; //When SW1 is flipped high, allow higher motor speeds
   }
   SW2 = (digitalRead(SW2PIN) == LOW);
@@ -215,10 +217,11 @@ void setup() {
   // limit power draw to .6A at 5v... Didn't seem to work in my FastLED version though
   //FastLED.setMaxPowerInVoltsAndMilliamps(5,DEFAULT_PLIMIT);
   FastLED.setBrightness(BRIGHTNESS);
+  
+  sensitivity = constrain(EEPROM.read(SENSITIVITY_ADDR), 0, SENSITIVITY_MAX);
+  pLimit = map(sensitivity, 0, SENSITIVITY_MAX, 600, 1);
 
-  //Recall saved settings from memory
-  sensitivity = EEPROM.read(SENSITIVITY_ADDR);
-  maxSpeed = min(EEPROM.read(MAX_SPEED_ADDR),MOT_MAX); //Obey the MOT_MAX the first power  cycle after chaning it.
+  maxSpeed = constrain(EEPROM.read(MAX_SPEED_ADDR), MOT_MIN, MOT_MAX); //Obey the MOT_MAX the first power  cycle after chaning it.
   beep_motor(1047,1396,2093); //Power on beep
 }
 
@@ -288,13 +291,13 @@ int encLimitRead(int minVal, int maxVal){
 // Manual vibrator control mode (red), still shows orgasm closeness in background
 void run_manual() {
   //In manual mode, only allow for 13 cursor positions, for adjusting motor speed.
-  int knob = encLimitRead(0,12);
-  motSpeed = map(knob, 0, 12, 0., (float)MOT_MAX);
-  analogWrite(MOTPIN, motSpeed);
+  int knob = encLimitRead(0, NUM_LEDS - 1);
+  motSpeed = map(knob, 0, NUM_LEDS - 1, 0., (float)MOT_MAX);
+  analogWrite(MOTPIN, (int)motSpeed);
 
   // @todo, needs to be fixed that already on boot up the sensitivity from EEPROM is used, if available
-  /*int presDraw = map(constrain(pressure - avgPressure, 0, pLimit),0,pLimit,0,NUM_LEDS*3);
-  draw_bars_3(presDraw, CRGB::Green,CRGB::Yellow,CRGB::Red);*/
+  int presDraw = map(constrain(pressure - avgPressure, 0, pLimit),0,pLimit,0,NUM_LEDS*3);
+  draw_bars_3(presDraw, CRGB::Green,CRGB::Yellow,CRGB::Red);
   draw_cursor(knob, CRGB::Red);
 }
 
@@ -303,10 +306,9 @@ void run_auto() {
   static float motIncrement = 0.0;
   motIncrement = ((float)maxSpeed / ((float)FREQUENCY * (float)rampTimeS));
 
-  int knob = encLimitRead(0,(3*NUM_LEDS)-1);
-  sensitivity = knob*4; //Save the setting if we leave and return to this state
+  sensitivity = encLimitRead(0, SENSITIVITY_MAX);
   //Reverse "Knob" to map it onto a pressure limit, so that it effectively adjusts sensitivity
-  pLimit = map(knob, 0, 3 * (NUM_LEDS - 1), 600, 1); //set the limit of delta pressure before the vibrator turns off
+  pLimit = map(sensitivity, 0, SENSITIVITY_MAX, 600, 1); //set the limit of delta pressure before the vibrator turns off
   //When someone clenches harder than the pressure limit
   if (pressure - avgPressure > pLimit) {
     motSpeed = -.5*(float)rampTimeS*((float)FREQUENCY*motIncrement);//Stay off for a while (half the ramp up time)
@@ -322,17 +324,16 @@ void run_auto() {
 
   int presDraw = map(constrain(pressure - avgPressure, 0, pLimit),0,pLimit,0,NUM_LEDS*3);
   draw_bars_3(presDraw, CRGB::Green,CRGB::Yellow,CRGB::Red);
-  draw_cursor_3(knob, CRGB(50,50,200),CRGB::Blue,CRGB::Purple);
-
+  draw_cursor_3(sensitivity, CRGB(50,50,200),CRGB::Blue,CRGB::Purple);
 }
 
 //Setting menu for adjusting the maximum vibrator speed automatic mode will ramp up to
 void run_opt_speed() {
   //Serial.println("speed settings");
   int knob = encLimitRead(0,12);
-  motSpeed = map(knob, 0, 12, 0., (float)MOT_MAX);
-  analogWrite(MOTPIN, motSpeed);
-  maxSpeed = motSpeed; //Set the maximum ramp-up speed in automatic mode
+  motSpeed = map(knob, 0, 12, (float)MOT_MIN, (float)MOT_MAX);
+  analogWrite(MOTPIN, (int)motSpeed);
+  maxSpeed = constrain((uint8_t)motSpeed, MOT_MIN, MOT_MAX); //Set the maximum ramp-up speed in automatic mode
   //Little animation to show ramping up on the LEDs
   static int visRamp = 0;
   if(visRamp <= FREQUENCY*NUM_LEDS-1) visRamp += 16;
@@ -472,13 +473,13 @@ void transition_to(uint8_t newState)
       break;
 
     case AUTO:
-      myEnc.write(sensitivity);   // sensitivity is encoder counts (0..144)
+      myEnc.write(sensitivity * 4);   // sensitivity is led counts (0..36, 3x 12)
       motSpeed = 0;
       analogWrite(MOTPIN, 0);
       break;
 
     case OPT_SPEED:
-      myEnc.write(map(maxSpeed, 0, 255, 0, 4 * (NUM_LEDS)));
+      myEnc.write(map(maxSpeed, MOT_MIN, MOT_MAX, 0, 4 * (NUM_LEDS - 1)));
       motSpeed = 0;
       analogWrite(MOTPIN, 0);
       break;
@@ -551,7 +552,11 @@ void commandIntroduce(SerialCommands* sender) {
 
 void commandAttributes(SerialCommands* sender)
 {
-  serial_printf(sender->GetSerial(), "attributes;timestampMs:ro[int],mode:rw[%d|%d],currentSpeed:ro[0-255],maxSpeed:rw[0-255],currentPressure:ro[0-4095],avgPressure:ro[0-4095],sensitivity:rw[1-37],maxPressureDelta:ro[1-600],rampUpTime:rw[10-60],remainingCoolDownTime:ro[0-15]\n", MANUAL, AUTO);
+  serial_printf(
+    sender->GetSerial(), 
+    "attributes;timestampMs:ro[int],mode:rw[%d|%d],currentSpeed:ro[0-%d],maxSpeed:rw[%d-%d],currentPressure:ro[0-4095],avgPressure:ro[0-4095],sensitivity:rw[1-%d],maxPressureDelta:ro[1-600],rampUpTime:rw[10-60],remainingCoolDownTime:ro[0-15]\n", 
+    MANUAL, AUTO, MOT_MAX, MOT_MIN, MOT_MAX, SENSITIVITY_MAX + 1
+  );
 }
 
 void commandStatus(SerialCommands* sender) {
@@ -566,7 +571,7 @@ void commandStatus(SerialCommands* sender) {
   serial_printf(
     sender->GetSerial(), 
     "status;timestampMs:%d,mode:%d,currentSpeed:%d,maxSpeed:%d,currentPressure:%d,avgPressure:%d,maxPressureDelta:%d,sensitivity:%d,rampUpTime:%d,remainingCoolDownTime:%d\n", 
-    millis(), state, statusMotSpeed, maxSpeed, pressure, avgPressure, pLimit, map(pLimit, 600, 1, 1, 37), rampTimeS, remainingCooldown
+    millis(), state, statusMotSpeed, maxSpeed, pressure, avgPressure, pLimit, sensitivity+1, rampTimeS, remainingCooldown
   );
 }
 
@@ -588,7 +593,7 @@ void commandSetMode(SerialCommands* sender)
 void commandSetMaxSpeed(SerialCommands* sender)
 {
   long inputMaxSpeed;
-  ParamError err = validateRangeParam(sender->Next(), 0, 255, inputMaxSpeed);
+  ParamError err = validateRangeParam(sender->Next(), MOT_MIN, MOT_MAX, inputMaxSpeed);
 
   if (err != ParamError::Ok) {
     serial_printf(sender->GetSerial(), "set-maxSpeed;;status:failed,reason:%s\n", paramErrorToString(err));
@@ -604,24 +609,22 @@ void commandSetMaxSpeed(SerialCommands* sender)
 void commandSetSensitivity(SerialCommands* sender)
 {
   long inputSensitivity;
-  ParamError err = validateRangeParam(sender->Next(), 1, 37, inputSensitivity);
+  ParamError err = validateRangeParam(sender->Next(), 1, SENSITIVITY_MAX + 1, inputSensitivity);
 
   if (err != ParamError::Ok) {
     serial_printf(sender->GetSerial(), "set-maxPressureDelta;;status:failed,reason:%s\n", paramErrorToString(err));
     return;
   }
 
+  sensitivity = inputSensitivity - 1;
+  pLimit = map(sensitivity, 0, SENSITIVITY_MAX, 600, 1);
+
   // set the thing
   if (state == AUTO) {
-    int steps = 3 * (NUM_LEDS - 1) + 1;   // 37
-
-    int step = constrain(inputSensitivity, 1, steps) - 1; // 0..36
-    myEnc.write(step * 4);
-  
-    serial_printf(sender->GetSerial(), "set-maxPressureDelta;%d;status:successful\n", inputSensitivity);
-  } else {
-    serial_printf(sender->GetSerial(), "set-maxPressureDelta;%d;status:failed,reason:not_in_auto_mode\n");
+    myEnc.write(sensitivity * 4);
   }
+
+  serial_printf(sender->GetSerial(), "set-maxPressureDelta;%d;status:successful\n", inputSensitivity);
 }
 
 void commandSetRampUpTime(SerialCommands* sender)
@@ -637,5 +640,5 @@ void commandSetRampUpTime(SerialCommands* sender)
   // set the thing
   rampTimeS = inputSetRampUpTime;
 
-  serial_printf(sender->GetSerial(), "set-setRampUpTime;%d;status:successful\n", pLimit);
+  serial_printf(sender->GetSerial(), "set-setRampUpTime;%d;status:successful\n", rampTimeS);
 }
