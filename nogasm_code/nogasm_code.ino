@@ -186,8 +186,6 @@ void setup() {
 
   digitalWrite(MOTPIN, LOW);//Make sure the motor is off
 
-  delay(3000); // 3 second delay for recovery
-
   //If a pin reads low, the switch is enabled. Here, we read in the DIP settings
   //Right now, only SW1 is used, for enabling higher maximum motor speed.
   if(digitalRead(SW1PIN)){
