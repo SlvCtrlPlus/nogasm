@@ -47,6 +47,7 @@
 #include "RunningAverage.h"
 #include <SerialCommands.h>
 #include "comm.h"
+//#include <SlvCtrlProtocol.h>
 
 //=======Hardware Setup===============================
 //LEDs
@@ -144,6 +145,17 @@ float motSpeed = 0; //Motor speed, 0-255 (float to maintain smooth ramping to lo
 #define MAX_SPEED_ADDR    2
 #define SENSITIVITY_ADDR  3
 //#define RAMPSPEED_ADDR    4 //For now, ramp speed adjustments aren't implemented
+
+// ===== Serial command handlers (forward declarations) =====
+void commandIntroduce(SerialCommands* sender);
+void commandAttributes(SerialCommands* sender);
+void commandStatus(SerialCommands* sender);
+void commandSetMode(SerialCommands* sender);
+void commandSetMaxSpeed(SerialCommands* sender);
+void commandSetSensitivity(SerialCommands* sender);
+void commandSetRampUpTime(SerialCommands* sender);
+void commandSetCurrentSpeed(SerialCommands* sender);
+void commandUnrecognized(SerialCommands* sender);
 
 //=======Setup=======================================
 //Beep out tones over the motor by frequency (1047,1396,2093) may work well
