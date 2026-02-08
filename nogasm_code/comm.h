@@ -1,7 +1,8 @@
 #ifndef COMM_H_INCLUDED
 #define COMM_H_INCLUDED
 
-#include <Arduino.h>        // uint8_t, Stream
+#include <stdint.h>         // uint8_t, Stream
+#include <stdarg.h>
 #include <SerialCommands.h> // SerialCommands
 
 enum class ParamError : uint8_t {

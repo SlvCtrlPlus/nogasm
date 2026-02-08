@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "comm.h"
 
 void serial_printf(Stream *serial, const char* format, ...) {
@@ -20,8 +21,6 @@ void commandUnrecognized(SerialCommands* sender, const char* cmd)
 {
     serial_printf(sender->GetSerial(), "Unrecognized command [%s]\n", cmd);
 }
-
-#include <stdlib.h>
 
 ParamError validateRangeParam(const char* valueStr, long minVal, long maxVal, long& outValue)
 {

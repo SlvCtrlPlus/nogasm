@@ -208,6 +208,7 @@ void setup() {
   serialCommands.AddCommand(new SerialCommand("set-maxSpeed", commandSetMaxSpeed));
   serialCommands.AddCommand(new SerialCommand("set-sensitivity", commandSetSensitivity));
   serialCommands.AddCommand(new SerialCommand("set-rampUpTime", commandSetRampUpTime));
+  serialCommands.AddCommand(new SerialCommand("set-currentSpeed", commandSetCurrentSpeed));
 
   serialCommands.GetSerial()->write(0x07);
 
@@ -552,8 +553,8 @@ void commandAttributes(SerialCommands* sender)
 {
   serial_printf(
     sender->GetSerial(), 
-    "attributes;timestampMs:ro[int],mode:rw[%d|%d],currentSpeed:ro[0-%d],maxSpeed:rw[%d-%d],currentPressure:ro[0-4095],avgPressure:ro[0-4095],sensitivity:rw[1-%d],maxPressureDelta:ro[1-600],rampUpTime:rw[10-60],remainingCoolDownTime:ro[0-15]\n", 
-    MANUAL, AUTO, MOT_MAX, MOT_MIN, MOT_MAX, SENSITIVITY_MAX + 1
+    "attributes;timestampMs:ro[int],mode:rw[%d|%d],currentSpeed:%s[0-%d],maxSpeed:rw[%d-%d],currentPressure:ro[0-4095],avgPressure:ro[0-4095],sensitivity:rw[1-%d],maxPressureDelta:ro[1-600],rampUpTime:rw[10-60],remainingCoolDownTime:ro[0-15]\n", 
+    MANUAL, AUTO, (state == AUTO ? "ro" : "rw"), MOT_MAX, MOT_MIN, MOT_MAX, SENSITIVITY_MAX + 1
   );
 }
 
@@ -598,8 +599,12 @@ void commandSetMaxSpeed(SerialCommands* sender)
     return;
   }
 
-  // set the thing
   maxSpeed = inputMaxSpeed;
+
+  // Clamp current motor speed to the new max
+  if (motSpeed > maxSpeed) {
+    motSpeed = maxSpeed;
+  }
 
   serial_printf(sender->GetSerial(), "set-maxSpeed;%d;status:successful\n", maxSpeed);
 }
@@ -627,16 +632,37 @@ void commandSetSensitivity(SerialCommands* sender)
 
 void commandSetRampUpTime(SerialCommands* sender)
 {
-  long inputSetRampUpTime;
-  ParamError err = validateRangeParam(sender->Next(), 10, 60, inputSetRampUpTime);
+  long inputRampUpTime;
+  ParamError err = validateRangeParam(sender->Next(), 10, 60, inputRampUpTime);
 
   if (err != ParamError::Ok) {
-    serial_printf(sender->GetSerial(), "set-setRampUpTime;;status:failed,reason:%s\n", paramErrorToString(err));
+    serial_printf(sender->GetSerial(), "set-rampUpTime;;status:failed,reason:%s\n", paramErrorToString(err));
     return;
   }
 
   // set the thing
-  rampTimeS = inputSetRampUpTime;
+  rampTimeS = inputRampUpTime;
 
-  serial_printf(sender->GetSerial(), "set-setRampUpTime;%d;status:successful\n", rampTimeS);
+  serial_printf(sender->GetSerial(), "set-rampUpTime;%d;status:successful\n", rampTimeS);
+}
+
+void commandSetCurrentSpeed(SerialCommands* sender)
+{
+  if (state != MANUAL) {
+    serial_printf(sender->GetSerial(), "set-currentSpeed;;status:failed,reason:not_in_manual_mode\n");
+    return;
+  }
+
+  long inputCurrentSpeed;
+  ParamError err = validateRangeParam(sender->Next(), 0, MOT_MAX, inputCurrentSpeed);
+
+  if (err != ParamError::Ok) {
+    serial_printf(sender->GetSerial(), "set-currentSpeed;;status:failed,reason:%s\n", paramErrorToString(err));
+    return;
+  }
+
+  int knob = map(inputCurrentSpeed, 0, MOT_MAX, 0, NUM_LEDS - 1);
+  myEnc.write(knob * 4);
+
+  serial_printf(sender->GetSerial(), "set-currentSpeed;%d;status:successful\n", motSpeed);
 }
