@@ -392,7 +392,7 @@ void setup() {
   pLimit = map(sensitivity, 0, SENSITIVITY_MAX, 600, 1);
 
   maxSpeed = constrain(EEPROM.read(MAX_SPEED_ADDR), MOT_MIN, MOT_MAX);
-  beep_motor(1047, 1396, 2093);
+  //beep_motor(1047, 1396, 2093); // commented out because it blocks for 750ms
 }
 
 void loop() {

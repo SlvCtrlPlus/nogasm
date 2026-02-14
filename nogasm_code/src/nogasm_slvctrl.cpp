@@ -75,7 +75,8 @@ static SlvCtrlParseError setCurrentSpeedAttr(void*, int32_t v) {
 
 // ----- Attributes -----
 static IntAttribute aTimestampMs("timestampMs", &getTimestampMs, nullptr);
-static RangeAttribute<int32_t> aMode("mode", &getMode, &setMode, (int32_t)MANUAL, (int32_t)AUTO);
+static int32_t modeOpts[] = { (int32_t)MANUAL, (int32_t)AUTO };
+static ListAttribute<int32_t> aMode("mode", &getMode, &setMode, modeOpts);
 
 // NOTE: Protocol access is static; cannot reflect "currentSpeed is RO in AUTO" without a custom attribute wrapper.
 static RangeAttribute<int32_t> aCurrentSpeed("currentSpeed", &getCurrentSpeed, &setCurrentSpeedAttr, 0, 255);
