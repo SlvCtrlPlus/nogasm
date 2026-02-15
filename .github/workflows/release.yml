@@ -1,11 +1,11 @@
-name: build-and-attach
+name: release
 
 on:
   release:
     types: [created]
 
 jobs:
-  platformio:
+  build-and-attach:
     runs-on: ubuntu-latest
 
     strategy:
