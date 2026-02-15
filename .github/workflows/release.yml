@@ -40,10 +40,18 @@ jobs:
           cd nogasm_code
           platformio run -e ${{ matrix.env }}
 
+      - name: Prepare firmware artifact
+        run: |
+          cd nogasm_code/.pio/build/${{ matrix.env }}
+          for f in firmware.*; do
+            ext="${f##*.}"
+            mv "$f" "nogasm-${{ matrix.env }}-${{ github.ref_name }}.$ext"
+          done
+
       - name: Upload firmware
         uses: softprops/action-gh-release@v2
         with:
-          files: nogasm_code/.pio/build/${{ matrix.env }}/firmware.*
-          name: nogasm-${{ matrix.env }}-${{ github.ref_name }}
+          files: |
+            nogasm_code/.pio/build/${{ matrix.env }}/nogasm-${{ matrix.env }}-${{ github.ref_name }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
